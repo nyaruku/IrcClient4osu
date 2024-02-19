@@ -17,7 +17,6 @@ size_t custom_strlen(const char* str) {
 	return length;
 }
 
-// Note: Has to be freed after usage, else Memory Leak
 // Function to concatenate multiple null-terminated char* strings
 char* custom_strcat(size_t numStrings, ...) {
 	// Calculate the total length of the concatenated string
@@ -82,14 +81,10 @@ const char* removeSubstring(const char* inputString, const char* substringToRemo
 bool lineStartsWith(const char* line, const char* prefix) {
 	return strncmp(line, prefix, strlen(prefix)) == 0;
 }
-bool endsWithChar(std::string input, char search) {
-	if (input[input.size() - 1] == search) {
-		return true;
-	}
-	else {
-		return false;
-	}
+bool endsWithChar(const std::string& input, char search) {
+	return input.back() == search;
 }
+
 
 wchar_t* MultiByteToWideChar(const char* string) {
 	// Calculate the required buffer size for the wide string
@@ -163,14 +158,15 @@ void ReplaceStringInPlace(std::string& subject, const std::string& search, const
 	}
 }
 
-inline std::string replaceString(std::string subject, const std::string& search, const std::string& replace) {
-	size_t pos = 0;
-	while ((pos = subject.find(search, pos)) != std::string::npos) {
+std::string replaceString(std::string subject, const std::string& search, const std::string& replace) {
+	size_t pos = subject.find(search);
+	while (pos != std::string::npos) {
 		subject.replace(pos, search.length(), replace);
-		pos += replace.length();
+		pos = subject.find(search, pos + replace.length());
 	}
 	return subject;
 }
+
 
 std::string FormatWithCommas(double value)
 {
