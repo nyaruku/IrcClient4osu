@@ -8,10 +8,20 @@ typedef struct
 	std::string port_string;
 } irc_connection;
 
+std::string connectionNotifier = "Not Connected";
+std::future<void> void_irc_runner;
+std::atomic<bool> run_threads(true);
+std::atomic<bool> init(false);
+
+// Full List:
+// https://www.alien.net.au/irc/irc2numerics.html
+// 353 - RPL_NAMREPLY, (this shit spams the console bruh)
+std::vector<const char*>event_filter_list{ "MODE","353" };
+
 // The IRC callbacks structure
 irc_callbacks_t callbacks;
-//Init Context
 
+//Init Context
 WSADATA wsaData;
 irc_session_t* session;
 irc_connection con;
@@ -25,6 +35,16 @@ typedef struct
 	const char* nick;
 } irc_ctx_t;
 irc_ctx_t ctx;
+
+// True: found event
+bool filter_event(const char* i_event) {
+	for (const char* l_event : event_filter_list) {
+		if (std::string(l_event) == std::string(i_event)) {
+			return true;
+		}
+	}
+	return false;
+}
 
 void addlog(const char* fmt, ...)
 {
@@ -40,7 +60,7 @@ void addlog(const char* fmt, ...)
 	va_end(va_alist);
 
 	//	printf("%s\n", buf);
-	logToConsole(buf);
+	logToConsole(std::string(buf) + std::string(""));
 }
 
 void dump_event(irc_session_t* session, const char* event, const char* origin, const char** params, unsigned int count)
@@ -57,8 +77,9 @@ void dump_event(irc_session_t* session, const char* event, const char* origin, c
 
 		strcat(buf, params[cnt]);
 	}
-
-	addlog("Event \"%s\", origin: \"%s\", params: %d [%s]", event, origin ? origin : "NULL", cnt, buf);
+	if (!filter_event(event)) {
+		addlog("Event \"%s\", origin: \"%s\", params: %d [%s]", event, origin ? origin : "NULL", cnt, buf);
+	}
 }
 
 void event_join(irc_session_t* session, const char* event, const char* origin, const char** params, unsigned int count)
@@ -142,41 +163,41 @@ void event_numeric(irc_session_t* session, unsigned int event, const char* origi
 	dump_event(session, buf, origin, params, count);
 }
 
-
-int con_con = 0;
-int error_count = 0;
-
-// reconnect after 2 attempts
+// Main IRC Event Loop.
 void irc_loop(irc_session_t* s) {
-	// and run into forever loop, generating events
-loop:
-
-	if (irc_run(s))
-	{
-		logToConsole("Could not connect or I/O error");
-		logError(irc_strerror(irc_errno(s)), irc_errno(s));
-		error_count++;
-		Sleep(3000);
-		if (error_count >= 2) {
-			// Disconnect
-			logToConsole("Disconnecting...");
-			irc_disconnect(s);
-			// Connect to a regular IRC server
-			logToConsole("Connecting to IRC Server...");
-		irc_init_connection:
-			if (irc_connect(s, con.server.c_str(), con.port, con.password.c_str(), con.username.c_str(), con.username.c_str(), con.username.c_str())) {
-				logError(irc_strerror(irc_errno(s)), irc_errno(s));
-				Sleep(3000);
-				goto irc_init_connection;
+	int error_count = 0;
+	while (run_threads) {
+		if (irc_run(s))
+		{
+			logToConsole("Could not connect or I/O error");
+			logError(irc_strerror(irc_errno(s)), irc_errno(s));
+			error_count++;
+			std::this_thread::sleep_for(std::chrono::milliseconds(3000));
+			if (error_count >= 2) {
+				// Disconnect
+				logToConsole("Disconnecting...");
+				irc_disconnect(s);
+				init = false;
+				// Reconnect
+				logToConsole("Connecting to IRC Server...");
+			irc_init_connection:
+				if (irc_connect(s, con.server.c_str(), con.port, con.password.c_str(), con.username.c_str(), con.username.c_str(), con.username.c_str())) {
+					logError(irc_strerror(irc_errno(s)), irc_errno(s));
+					std::this_thread::sleep_for(std::chrono::milliseconds(3000));
+					init = false;
+					goto irc_init_connection;
+				}
+				logToConsole("Successful!");
+				error_count = 0;
 			}
-			logToConsole("Successful!");
-			error_count = 0;
 		}
-
-		goto loop;
+		std::this_thread::sleep_for(std::chrono::milliseconds(35));
 	}
 }
 
+// Function to initialize irc.
+// * Returns '0' : If successful.
+// * Returns '1' : If error, see console log.
 int init_irc() {
 	if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) {
 		logError("Couldn't initialize Winsock2!", -1);
@@ -202,14 +223,12 @@ int init_irc() {
 	callbacks.event_unknown = dump_event;
 	callbacks.event_numeric = event_numeric;
 
-
 	// Now create the session
 	session = irc_create_session(&callbacks);
 
 	if (!session) {
 		logError("Could not create session", -1);
-		return 2;
-		
+		return 1;
 	}
 
 	irc_option_set(session, LIBIRC_OPTION_STRIPNICKS);
@@ -221,45 +240,33 @@ int init_irc() {
 	con.port_string = std::to_string(con.port);
 
 	//Init Context
-	ctx.channel = "#BanchoBot";
+	ctx.channel = "BanchoBot";
 	ctx.nick = con.username.c_str();
 	irc_set_ctx(session, &ctx);
 	return 0;
-} 
+}
 
-/*
- Function to connect to irc (username, password).
- * Returns '0' : If connecting was successful.
- * Returns '1' : If connecting failed for whatever reason, see console log.
- */
+// Function to connect to irc (username, password).
+// * Returns '0' : If connecting was successful.
+// * Returns '1' : If connecting failed for whatever reason, see console log.
 int connect_irc(const char* u_name, const char* pw)
 {
-	con_con = 0;
+	init = false;
+	init_irc();
 	// Connect to a regular IRC server
 	logToConsole("Connecting to IRC Server....");
-irc_init_connection:
-	if (con_con == 2) {
-		return 1;
+
+	irc_connect(session, con.server.c_str(), con.port, pw, u_name, u_name, u_name);
+	if (irc_run(session) == 0) {
+		connectionNotifier = "Connected";
+		// SUCCESS
+		void_irc_runner = std::async(std::launch::async, irc_loop, session);
+		return irc_errno(session);
 	}
-	if (irc_connect(session, con.server.c_str(), con.port, pw, u_name, u_name, u_name)) {
+	else {
+		// ERORR
 		logError(irc_strerror(irc_errno(session)), irc_errno(session));
-		Sleep(1500);
-		goto irc_init_connection;
-		con_con++;
+		return irc_errno(session);
 	}
-
-	logToConsole("Successful!");
-	logToConsole("Starting IRC Loop as separated thread.");
-
-	std::thread ircLoop(irc_loop, session);  // spawn new thread that calls bar(0)
-	bool init = false;
-	while (true) {
-		Sleep(750);
-		if (!init) {
-			if (irc_cmd_whois(session, ctx.nick) == 0) {
-				init = true;
-			}
-		}
-	}
-	return 0;
+	return -1;
 }

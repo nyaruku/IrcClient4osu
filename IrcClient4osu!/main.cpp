@@ -11,8 +11,11 @@
 #include <Windows.h>
 #include <codecvt>
 #include "logger.h"
-
+#include <future>
 #pragma comment(lib,"WS2_32")
+
+void connection_watcher();
+void result_watcher();
 
 #pragma region IMGUI
 #include "imgui.h"
@@ -38,6 +41,10 @@ static void glfw_error_callback(int error, const char* description)
 // Main code
 HWND console_window;
 bool console_display = false;
+std::string spinner_s = "";
+
+std::string connectionStatus = "";
+std::future<int> result;
 int main(int, char**)
 {
 #pragma region Console Inits
@@ -62,6 +69,10 @@ int main(int, char**)
 	{
 		//return GetLastError();
 	}
+	CONSOLE_CURSOR_INFO info;
+	info.dwSize = 100;
+	info.bVisible = FALSE;
+	SetConsoleCursorInfo(hOut, &info);
 	//UTF-8
 	SetConsoleOutputCP(65001);
 	console_window = FindWindowA("ConsoleWindowClass", NULL);
@@ -75,7 +86,6 @@ int main(int, char**)
 	//Reset all - \033[0m
 
 #pragma endregion
-
 #pragma region stuff
 	const double fpsLimitFocused = 1.0 / 60.0; // 60 FPS when focused
 	const double fpsLimitUnfocused = 1.0 / 5.0; // 5 FPS when not focused
@@ -128,6 +138,18 @@ int main(int, char**)
 
 #pragma endregion
 
+	switch (init_irc()) {
+	case 0:
+		break;
+	case 1:
+		break;
+	case 2:
+		break;
+	}
+
+	// Create a std::future object that will hold the result of the computation
+	std::future<void> void_connection_watcher = std::async(std::launch::async, connection_watcher);
+	std::future<void> void_result_watcher;
 	std::string artText =
 		"                       ________  ______\n"
 		"  ____  _______  __   /  _/ __ \\/ ____/\n"
@@ -146,15 +168,6 @@ int main(int, char**)
 	std::cout << "\033[38;2;0;170;255mosu!\033[38;2;255;255;255m IRC Client in \033[38;2;255;255;0mC++\033[38;2;255;255;255m by \033[38;2;0;170;255m\033[1m_Railgun_\033[0m" << std::endl;
 	std::cout << "IRC Library: '\033[38;2;255;255;0mlibircclient\033[0m' | \033[38;2;0;170;255mhttps://github.com/shaoner/libircclient\033[0m" << std::endl;
 	std::cout << "Frontend: '\033[38;2;255;255;0mImGui\033[0m' | \033[38;2;0;170;255mOpenGL 2\033[0m" << std::endl << std::endl;
-
-	switch (init_irc()) {
-	case 0:
-		break;
-	case 1:
-		break;
-	case 2:
-		break;
-	}
 
 	// Main loop
 	while (!glfwWindowShouldClose(window))
@@ -200,28 +213,29 @@ int main(int, char**)
 			console_display = !console_display;
 			ShowWindow(console_window, console_display);
 		}
-		int fps = (ImGui::GetIO().Framerate);
-		ImGui::Text(("FPS: " + std::to_string(fps)).c_str());
+		ImGui::Text(connectionNotifier.c_str());
 		ImGui::EndMainMenuBar();
 		ImGui::SetNextWindowPos(ImVec2(0, ImGui::GetFrameHeight()));
 		ImGui::SetNextWindowSize(ImVec2(io.DisplaySize.x, io.DisplaySize.y - ImGui::GetFrameHeight()));
 
 		switch (ui_toggle) {
 		case 0:
-			ImGui::Begin("wMain", NULL, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoScrollWithMouse);
+			ImGui::Begin("windowMain", NULL, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoScrollWithMouse);
 			ImGui::SetCursorPosX((ImGui::GetWindowSize().x - ImGui::CalcTextSize(artText.c_str()).x) * 0.5f);
 			ImGui::SetCursorPosY((ImGui::GetWindowSize().y - ImGui::CalcTextSize(artText.c_str()).y) * 0.3f);
-			ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(100, 0, 255, 1));
+			ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0, 255, 255, 1));
 			ImGui::Text(artText.c_str());
 			ImGui::PopStyleColor(1);
 			ImGui::NewLine();
 			ImGui::SetNextItemWidth(300);
 			ImGui::SetCursorPosX((ImGui::GetWindowSize().x - (300 + ImGui::CalcTextSize("IRC Username").x)) * 0.5f);
+			ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(96.0f / 255.0f, 96.0f / 255.0f, 96.0f / 255.0f, 1));
+			ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(25.0f / 255.0f, 25.0f / 255.0f, 25.0f / 255.0f, 1.00f));
 			ImGui::InputText("Server", &con.server, ImGuiInputTextFlags_ReadOnly);
 			ImGui::SetNextItemWidth(300);
 			ImGui::SetCursorPosX((ImGui::GetWindowSize().x - (300 + ImGui::CalcTextSize("IRC Username").x)) * 0.5f);
-
 			ImGui::InputText("Port", &con.port_string, ImGuiInputTextFlags_ReadOnly);
+			ImGui::PopStyleColor(2);
 
 			ImGui::SetNextItemWidth(300);
 			ImGui::SetCursorPosX((ImGui::GetWindowSize().x - (300 + ImGui::CalcTextSize("IRC Username").x)) * 0.5f);
@@ -232,9 +246,13 @@ int main(int, char**)
 			ImGui::SetCursorPosX((ImGui::GetWindowSize().x - (300 + ImGui::CalcTextSize("IRC Username").x)) * 0.5f);
 
 			if (ImGui::Button("Connect", ImVec2(300, 21))) {
-				if (connect_irc(con.username.c_str(), con.password.c_str()) == 0) {
-				}
+				result = std::async(std::launch::async, connect_irc, con.username.c_str(), con.password.c_str());
+				void_result_watcher = std::async(std::launch::async, result_watcher);
 			}
+			ImGui::SetCursorPosX((ImGui::GetWindowSize().x - (300 + ImGui::CalcTextSize("IRC Username").x)) * 0.5f);
+			ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(255, 0, 0, 1));
+			ImGui::Text(connectionStatus.c_str());
+			ImGui::PopStyleColor(1);
 			ImGui::SetCursorPosX(4);
 			ImGui::SetCursorPosY((ImGui::GetWindowSize().y - (ImGui::CalcTextSize("_Railgun_").y) - 4));
 			ImGui::Text("_Railgun_");
@@ -299,6 +317,8 @@ int main(int, char**)
 		lastUpdateTime = now;
 #pragma endregion
 	}
+	run_threads = false;
+	irc_disconnect(session);
 
 	// Cleanup
 	ImGui_ImplOpenGL2_Shutdown();
@@ -309,4 +329,33 @@ int main(int, char**)
 	glfwTerminate();
 
 	return 0;
+}
+
+void connection_watcher() {
+	while (run_threads) {
+		if (irc_is_connected(session) == 1) {
+			connectionNotifier = "Connected";
+			if (!init) {
+				// commands for one time execution
+		//		irc_cmd_join(session, "#", "");
+				if (irc_cmd_whois(session, con.username.c_str()) == 0) {
+					init = true;
+				}
+			}
+		}
+		else {
+			connectionNotifier = "Not Connected";
+		}
+
+		std::this_thread::sleep_for(std::chrono::milliseconds(200));
+	}
+}
+
+void result_watcher() {
+	if (result.get() == 0) {
+		connectionStatus = "";
+	}
+	else {
+		connectionStatus = "Failed to Connect, Error:\n" + std::string(irc_strerror(irc_errno(session)));
+	}
 }
